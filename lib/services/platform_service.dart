@@ -6,6 +6,7 @@ import 'package:beatz/models/audio_media.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+/// Bridge to the Android side (MediaStore queries + MediaPlayer playback).
 class PlatformService {
   static const MethodChannel _channel = MethodChannel('com.npkompleet.beatz');
   static const String _fetchAlbumMethod = 'fetchAlbums';
@@ -15,90 +16,78 @@ class PlatformService {
   static const String _resumeMethod = 'resume';
   static const String _playSongMethod = 'play';
   static const String _positionMethod = 'position';
-  static const String _songCompleteMethod = "complete";
-  static ValueNotifier<String> stopNotifier = ValueNotifier("");
-  static ValueNotifier<int> positionNotifier = ValueNotifier(0);
+  static const String _songCompleteMethod = 'complete';
+  static const String _errorMethod = 'error';
 
-  // Method handler for calls to be executed
-  // on the Flutter side of the channel
-  static Future<void> callHandler(MethodCall call) {
+  /// "complete" when the current song finished, "error" when playback failed.
+  static final ValueNotifier<String> stopNotifier = ValueNotifier('');
+
+  /// Current playback position in milliseconds.
+  static final ValueNotifier<int> positionNotifier = ValueNotifier(0);
+
+  static bool _handlerSet = false;
+
+  static void _ensureHandler() {
+    if (_handlerSet) return;
+    _handlerSet = true;
+    _channel.setMethodCallHandler(_callHandler);
+  }
+
+  // Method handler for calls executed on the Flutter side of the channel.
+  static Future<void> _callHandler(MethodCall call) async {
     switch (call.method) {
       case _songCompleteMethod:
-        stopNotifier.value = "complete";
-        print("completed");
-        break;
+        stopNotifier.value = 'complete';
+      case _errorMethod:
+        stopNotifier.value = 'error';
       case _positionMethod:
-        int position = call.arguments;
-        positionNotifier.value = position;
-        break;
+        positionNotifier.value = call.arguments as int;
     }
-    return null;
   }
 
+  /// Throws a [PlatformException] when the library can't be read.
   static Future<List<Album>> fetchAlbums() async {
-    String result = "";
-    try {
-      result = await _channel.invokeMethod(_fetchAlbumMethod);
-    } on PlatformException catch (e) {
-      print(e);
-    }
-    return compute(parseAlbums, result);
+    final result = await _channel.invokeMethod<String>(_fetchAlbumMethod);
+    return compute(parseAlbums, result ?? '[]');
   }
 
-  static List<Album> parseAlbums(String result) {
-    List<Album> albums = [];
-    Iterable message = json.decode(result);
-    message.forEach((e) => albums.add(Album.fromJson(e)));
-    return albums;
-  }
+  static List<Album> parseAlbums(String result) => (json.decode(result) as List)
+      .map((e) => Album.fromJson(e as Map<String, dynamic>))
+      .toList();
 
+  /// Throws a [PlatformException] when the library can't be read.
   static Future<List<AudioMedia>> fetchSongsFromAlbum(int id) async {
-    Map<String, int> albumInfo = {"albumId": id};
-    String result = "";
+    final result = await _channel
+        .invokeMethod<String>(_fetchSongsFromAlbumMethod, {'albumId': id});
+    return compute(parseAlbumSongs, result ?? '[]');
+  }
+
+  static List<AudioMedia> parseAlbumSongs(String result) =>
+      (json.decode(result) as List)
+          .map((e) => AudioMedia.fromJson(e as Map<String, dynamic>))
+          .toList();
+
+  /// Starts playing [url]; completes once playback has started.
+  static Future<void> playSong(String url) async {
+    _ensureHandler();
     try {
-      result =
-          await _channel.invokeMethod(_fetchSongsFromAlbumMethod, albumInfo);
-      print("Songs: $result");
+      await _channel.invokeMethod<String>(_playSongMethod, {'songUrl': url});
     } on PlatformException catch (e) {
-      print(e);
+      debugPrint('play failed: $e');
+      stopNotifier.value = 'error';
     }
-    return compute(parseAlbumSongs, result);
   }
 
-  static List<AudioMedia> parseAlbumSongs(String result) {
-    List<AudioMedia> albumSongsList = [];
-    Iterable message = json.decode(result);
-    message.forEach((e) => albumSongsList.add(AudioMedia.fromJson(e)));
-    return albumSongsList;
-  }
+  static Future<void> seekTo(int playbackPosition) =>
+      _channel.invokeMethod<void>(_seekMethod, {'position': playbackPosition});
 
-  static Future<String> playSong(String url) async {
-    _channel.setMethodCallHandler(callHandler);
-    Map<String, String> songInfo = {"songUrl": url};
-    String result = "";
-    try {
-      result = await _channel.invokeMethod(_playSongMethod, songInfo);
-      print("Result was: $result");
-    } on PlatformException catch (e) {
-      print(e);
-    }
-    return result;
-  }
+  static Future<void> pauseSong() => _channel.invokeMethod<void>(_pauseMethod);
 
-  static Future<void> seekTo(int playbackPosition) async {
-    await _channel.invokeMethod(_seekMethod, {"position": playbackPosition});
-  }
-
-  static Future<void> pauseSong() async {
-    await _channel.invokeMethod(_pauseMethod);
-  }
-
-  static Future<void> resumeSong() async {
-    await _channel.invokeMethod(_resumeMethod);
-  }
+  static Future<void> resumeSong() =>
+      _channel.invokeMethod<void>(_resumeMethod);
 
   static void reset() {
-    stopNotifier.value = "";
+    stopNotifier.value = '';
     positionNotifier.value = 0;
   }
 }

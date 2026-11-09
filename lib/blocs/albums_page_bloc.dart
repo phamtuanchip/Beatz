@@ -7,20 +7,28 @@ import 'package:beatz/services/platform_service.dart';
 import 'package:rxdart/rxdart.dart';
 
 class AlbumsPageBloc extends BlocBase {
-  List<Album> _albumList = [];
-
-  /// Stream to handle displaying albums
-  BehaviorSubject<List<Album>> _listController = BehaviorSubject<List<Album>>();
-  StreamSink<List<Album>> get _albumListSink => _listController.sink;
+  /// Emits the album list, or an error when the library can't be read
+  /// (e.g. the permission was denied).
+  final BehaviorSubject<List<Album>> _listController =
+      BehaviorSubject<List<Album>>();
   Stream<List<Album>> get albumListStream => _listController.stream;
 
-  AlbumsPageBloc() {
-    _fetchAlbums();
+  final Future<List<Album>> Function() _fetchAlbums;
+
+  AlbumsPageBloc({Future<List<Album>> Function()? fetchAlbums})
+      : _fetchAlbums = fetchAlbums ?? PlatformService.fetchAlbums {
+    refresh();
   }
 
-  Future<void> _fetchAlbums() async {
-    _albumList = await PlatformService.fetchAlbums();
-    _albumListSink.add(UnmodifiableListView<Album>(_albumList));
+  Future<void> refresh() async {
+    try {
+      final albums = await _fetchAlbums();
+      if (!_listController.isClosed) {
+        _listController.add(UnmodifiableListView<Album>(albums));
+      }
+    } catch (e) {
+      if (!_listController.isClosed) _listController.addError(e);
+    }
   }
 
   @override

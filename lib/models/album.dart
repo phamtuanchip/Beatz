@@ -1,27 +1,30 @@
 class Album {
-  int id;
-  String album;
-  String artist;
-  String albumArt;
-  int numOfSongs;
+  final int id;
+  final String album;
+  final String artist;
 
-  Album(this.id, this.album, this.artist, this.albumArt, this.numOfSongs);
+  /// Absolute path to the cover image, or null when the album has none.
+  final String? albumArt;
+  final int numOfSongs;
 
-  Album.fromJson(Map<String, dynamic> json) {
-    album = json['album'];
-    albumArt = json['albumArt'];
-    artist = json['artist'] == "<unknown>" ? "Unknown" : json['artist'];
-    id = json['id'];
-    numOfSongs = json['numOfSongs'];
+  const Album(this.id, this.album, this.artist, this.albumArt, this.numOfSongs);
+
+  factory Album.fromJson(Map<String, dynamic> json) {
+    final artist = json['artist'] as String?;
+    return Album(
+      json['id'] as int,
+      json['album'] as String? ?? 'Unknown',
+      artist == null || artist == '<unknown>' ? 'Unknown' : artist,
+      json['albumArt'] as String?,
+      json['numOfSongs'] as int? ?? 0,
+    );
   }
 
-  Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = new Map<String, dynamic>();
-    data['album'] = this.album;
-    data['albumArt'] = this.albumArt;
-    data['artist'] = this.artist;
-    data['id'] = this.id;
-    data['numOfSongs'] = this.numOfSongs;
-    return data;
-  }
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'album': album,
+        'artist': artist,
+        'albumArt': albumArt,
+        'numOfSongs': numOfSongs,
+      };
 }

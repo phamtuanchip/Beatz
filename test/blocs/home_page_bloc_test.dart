@@ -1,18 +1,12 @@
 import 'package:beatz/blocs/home_page_bloc.dart';
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 
-main() {
-  test('test HomePageBloc gives the right output and in order', () async {
-    HomePageBloc bloc = HomePageBloc();
+void main() {
+  test('HomePageBloc emits page indexes in order', () {
+    final bloc = HomePageBloc();
     bloc.pageIndex.add(1);
     bloc.pageIndex.add(3);
     bloc.pageIndex.add(0);
-    expect(
-        bloc.pageIndexStream,
-        emitsInOrder([
-          emits((val) => val == 1),
-          emits((val) => val == 3),
-          emits((val) => val == 0),
-        ]));
+    expect(bloc.pageIndexStream, emitsInOrder([1, 3, 0]));
   });
 }

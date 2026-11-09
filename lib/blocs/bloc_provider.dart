@@ -4,29 +4,24 @@ abstract class BlocBase {
   void dispose();
 }
 
+/// Owns a bloc for the lifetime of its subtree and disposes it afterwards.
 class BlocProvider<T extends BlocBase> extends StatefulWidget {
-  BlocProvider({
-    Key key,
-    @required this.child,
-    @required this.bloc,
-  }) : super(key: key);
+  const BlocProvider({super.key, required this.child, required this.bloc});
 
   final T bloc;
   final Widget child;
 
   @override
-  _BlocProviderState<T> createState() => _BlocProviderState<T>();
+  State<BlocProvider<T>> createState() => _BlocProviderState<T>();
 
   static T of<T extends BlocBase>(BuildContext context) {
-    final type = _typeOf<BlocProvider<T>>();
-    BlocProvider<T> provider = context.ancestorWidgetOfExactType(type);
-    return provider.bloc;
+    final provider = context.findAncestorWidgetOfExactType<BlocProvider<T>>();
+    assert(provider != null, 'No BlocProvider<$T> found in context');
+    return provider!.bloc;
   }
-
-  static Type _typeOf<T>() => T;
 }
 
-class _BlocProviderState<T> extends State<BlocProvider<BlocBase>> {
+class _BlocProviderState<T extends BlocBase> extends State<BlocProvider<T>> {
   @override
   void dispose() {
     widget.bloc.dispose();
@@ -34,7 +29,5 @@ class _BlocProviderState<T> extends State<BlocProvider<BlocBase>> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return widget.child;
-  }
+  Widget build(BuildContext context) => widget.child;
 }

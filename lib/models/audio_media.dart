@@ -1,37 +1,42 @@
 class AudioMedia {
-  int id;
-  String title;
-  String displayName;
-  String artist;
-  int duration;
-  int track;
-  String uri;
-  String type;
+  final int id;
+  final String title;
+  final String displayName;
+  final String artist;
 
-  AudioMedia(this.id, this.title, this.displayName, this.artist, this.duration,
-      this.track, this.uri, this.type);
+  /// Duration in milliseconds.
+  final int duration;
+  final int track;
 
-  AudioMedia.fromJson(Map<String, dynamic> json) {
-    artist = json['artist'];
-    displayName = json['displayName'];
-    duration = json['duration'];
-    id = json['id'];
-    title = json['title'];
-    track = json['track'];
-    uri = json['uri'];
-    type = json['type'];
+  /// content:// URI of the track in MediaStore.
+  final String uri;
+  final String? type;
+
+  const AudioMedia(this.id, this.title, this.displayName, this.artist,
+      this.duration, this.track, this.uri, this.type);
+
+  factory AudioMedia.fromJson(Map<String, dynamic> json) {
+    final artist = json['artist'] as String?;
+    return AudioMedia(
+      json['id'] as int,
+      json['title'] as String? ?? '',
+      json['displayName'] as String? ?? '',
+      artist == null || artist == '<unknown>' ? 'Unknown' : artist,
+      json['duration'] as int? ?? 0,
+      json['track'] as int? ?? 0,
+      json['uri'] as String,
+      json['type'] as String?,
+    );
   }
 
-  Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = new Map<String, dynamic>();
-    data['artist'] = this.artist;
-    data['displayName'] = this.displayName;
-    data['duration'] = this.duration;
-    data['id'] = this.id;
-    data['title'] = this.title;
-    data['track'] = this.track;
-    data['uri'] = this.uri;
-    data['type'] = this.type;
-    return data;
-  }
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'displayName': displayName,
+        'artist': artist,
+        'duration': duration,
+        'track': track,
+        'uri': uri,
+        'type': type,
+      };
 }

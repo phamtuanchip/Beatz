@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:beatz/blocs/bloc_provider.dart';
 import 'package:beatz/blocs/current_album_bloc.dart';
 import 'package:beatz/models/album.dart';
@@ -12,10 +10,10 @@ import 'package:flutter/material.dart';
 class CurrentAlbumPage extends StatefulWidget {
   final Album album;
 
-  CurrentAlbumPage({@required this.album});
+  const CurrentAlbumPage({super.key, required this.album});
 
   @override
-  _CurrentPlayingPageState createState() => _CurrentPlayingPageState();
+  State<CurrentAlbumPage> createState() => _CurrentPlayingPageState();
 }
 
 class _CurrentPlayingPageState extends State<CurrentAlbumPage>
@@ -23,19 +21,19 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
   final double iconSize = 35.0;
   final Color iconColor = Colors.deepOrangeAccent;
 
-  AnimationController _needleAnimCtrl;
-  AnimationController _recordAnimCtrl;
-  OverlayState _overlayState;
-  OverlayEntry _overlayEntry;
-  CurrentAlbumBloc _bloc;
+  late final AnimationController _needleAnimCtrl;
+  late final AnimationController _recordAnimCtrl;
+  OverlayEntry? _overlayEntry;
+  late CurrentAlbumBloc _bloc;
+  bool _listeningToPlayback = false;
 
   @override
-  initState() {
+  void initState() {
     super.initState();
     _recordAnimCtrl = AnimationController(
-        duration: Duration(milliseconds: 4000), vsync: this);
+        duration: const Duration(milliseconds: 4000), vsync: this);
     _needleAnimCtrl = AnimationController(
-        duration: Duration(milliseconds: 1000),
+        duration: const Duration(milliseconds: 1000),
         vsync: this,
         lowerBound: -0.2,
         upperBound: 0.0)
@@ -62,7 +60,7 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
             ),
             title: ValueListenableBuilder<List<String>>(
                 valueListenable: _bloc.songInfo,
-                builder: (_, list, __) => Column(
+                builder: (_, list, _) => Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
@@ -78,7 +76,7 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                     )),
             leading: IconButton(
               icon: Icon(Icons.keyboard_backspace, size: 30.0),
-              onPressed: () {},
+              onPressed: () => Navigator.maybePop(context),
             ),
           ),
           body: Stack(
@@ -144,14 +142,14 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
             stream: _bloc.albumSongsListStream,
             builder: (BuildContext context,
                 AsyncSnapshot<List<AudioMedia>> snapshot) {
-              bool data = snapshot.hasData && snapshot.data.isNotEmpty;
+              final bool data = snapshot.hasData && snapshot.data!.isNotEmpty;
               return Column(
                 children: <Widget>[
                   StreamBuilder<List<String>>(
                       stream: _bloc.uiStream,
                       initialData: ["0.0", "00:00", "00:00"],
                       builder: (context, snapshot) {
-                        List<String> list = snapshot.data;
+                        final List<String> list = snapshot.data!;
                         return Column(
                           children: <Widget>[
                             Slider(
@@ -167,8 +165,8 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: <Widget>[
-                                  Text("${list.elementAt(1)}"),
-                                  Text("${list.elementAt(2)}"),
+                                  Text(list.elementAt(1)),
+                                  Text(list.elementAt(2)),
                                 ],
                               ),
                             ),
@@ -198,7 +196,7 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                           radius: 30.0,
                           child: ValueListenableBuilder<String>(
                               valueListenable: _bloc.playState,
-                              builder: (_, value, __) {
+                              builder: (_, value, _) {
                                 return IconButton(
                                   icon: Icon(
                                     value == "play" || value == "resume"
@@ -235,8 +233,8 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
   }
 
   void _showSongsList(BuildContext context) {
-    _overlayState = Overlay.of(context);
-    _overlayEntry = OverlayEntry(
+    _removeOverlay();
+    final entry = OverlayEntry(
         builder: (context) => AspectRatio(
               aspectRatio: 1.0,
               child: GestureDetector(
@@ -248,7 +246,7 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                   child: OverflowBox(
                     alignment: Alignment.center,
                     maxWidth: MediaQuery.of(context).size.width + 100.0,
-                    child: Container(
+                    child: SizedBox(
                       width: MediaQuery.of(context).size.width + 100.0,
                       child: CircleAvatar(
                         child: _buildSongList(context),
@@ -258,7 +256,8 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                 ),
               ),
             ));
-    _overlayState.insert(_overlayEntry);
+    _overlayEntry = entry;
+    Overlay.of(context).insert(entry);
   }
 
   Widget _buildSongList(BuildContext context) {
@@ -274,7 +273,7 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                   shrinkWrap: true,
                   itemCount: snapshot.data?.length ?? 0,
                   itemBuilder: (context, index) {
-                    AudioMedia media = snapshot.data.elementAt(index);
+                    final AudioMedia media = snapshot.data![index];
                     return Column(
                       children: <Widget>[
                         Divider(
@@ -285,7 +284,7 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
                           media.title,
                           style: TextStyle(fontSize: 20.0),
                         ),
-                        index == snapshot.data.length - 1
+                        index == snapshot.data!.length - 1
                             ? Divider(
                                 height: 10.0,
                                 color: Colors.white70,
@@ -299,18 +298,25 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
     );
   }
 
-  void _removeOverlay() => _overlayEntry?.remove();
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
 
-  Future<Null> _playOrPauseSong() async {
+  Future<void> _playOrPauseSong() async {
     if (_bloc.playState.value != "play" &&
         _bloc.playState.value != "pause" &&
         _bloc.playState.value != "resume") {
       _needleAnimCtrl.forward();
       // Wait for the needle animation to complete
       // before adding the song
-      await Future.delayed(Duration(milliseconds: 1000));
+      await Future.delayed(const Duration(milliseconds: 1000));
+      if (!mounted) return;
+      if (!_listeningToPlayback) {
+        _listeningToPlayback = true;
+        _bloc.playState.addListener(_onPlaybackEvent);
+      }
       _bloc.startSong.add(0);
-      _bloc.playState.addListener(_onPlaybackEvent);
     } else if (_bloc.playState.value == "play" ||
         _bloc.playState.value == "resume") {
       _bloc.playState.value = "pause";
@@ -319,19 +325,24 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
     }
   }
 
-  Future<Null> _onPlaybackEvent() async {
+  Future<void> _onPlaybackEvent() async {
     switch (_bloc.playState.value) {
       case "stop":
         _recordAnimCtrl.stop();
         _needleAnimCtrl.reverse();
         // Wait for the needle reverse animation to complete
         // before resetting the controller
-        await Future.delayed(Duration(milliseconds: 1000));
-        _needleAnimCtrl.reset();
+        await Future.delayed(const Duration(milliseconds: 1000));
+        if (mounted) _needleAnimCtrl.reset();
         break;
       case "error":
         _recordAnimCtrl.stop();
         _needleAnimCtrl.reverse();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This song could not be played.')),
+          );
+        }
         break;
       case "pause":
         _recordAnimCtrl.stop();
@@ -351,7 +362,8 @@ class _CurrentPlayingPageState extends State<CurrentAlbumPage>
     _needleAnimCtrl.dispose();
     _recordAnimCtrl.dispose();
     _removeOverlay();
-    _bloc.dispose();
+    // The bloc itself is disposed by its BlocProvider.
+    if (_listeningToPlayback) _bloc.playState.removeListener(_onPlaybackEvent);
     super.dispose();
   }
 }

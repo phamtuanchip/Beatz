@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('Home page test', (WidgetTester tester) async {
-    await tester.pumpWidget(new MyApp());
+    await tester.pumpWidget(MyApp());
 
     // Verify that appropriate widgets are visible
     expect(find.byType(BottomNavigationBar), findsOneWidget);

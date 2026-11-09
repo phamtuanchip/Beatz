@@ -10,96 +10,104 @@ import 'package:rxdart/rxdart.dart';
 
 class CurrentAlbumBloc extends BlocBase {
   List<AudioMedia> _albumSongsList = [];
-  int _songIndex = 0;
+  final int _songIndex = 0;
   int _duration = 0;
-  String _durationString;
-  int _position = 0;
-  final playState = ValueNotifier<String>("");
+  String _durationString = '00:00';
+
+  /// One of "", "play", "pause", "resume", "stop", "error".
+  final playState = ValueNotifier<String>('');
+
+  /// [title, artist] of the current song, empty until songs are loaded.
   final songInfo = ValueNotifier<List<String>>([]);
 
   // Stream to handle displaying songs
-  BehaviorSubject<List<AudioMedia>> _listController =
+  final BehaviorSubject<List<AudioMedia>> _listController =
       BehaviorSubject<List<AudioMedia>>();
-  StreamSink<List<AudioMedia>> get _albumSongsListSink => _listController.sink;
   Stream<List<AudioMedia>> get albumSongsListStream => _listController.stream;
 
   // Stream to handle playing songs
-  StreamController _playController = StreamController();
-  StreamSink get startSong => _playController.sink;
-  Stream get _playSong => _playController.stream;
+  final StreamController<int> _playController = StreamController<int>();
+  StreamSink<int> get startSong => _playController.sink;
 
-  // Stream to handle updating slider
-  StreamController<List<String>> _uiController =
+  // Stream to handle updating the slider: [progress 0..1, position, duration]
+  final StreamController<List<String>> _uiController =
       StreamController<List<String>>();
-  StreamSink<List<String>> get _uiSink => _uiController.sink;
   Stream<List<String>> get uiStream => _uiController.stream;
 
-  StreamController<double> _seekerController =
+  final StreamController<double> _seekerController =
       StreamController<double>.broadcast();
   StreamSink<double> get seekTo => _seekerController.sink;
-  Stream<double> get _seek => _seekerController.stream;
 
   CurrentAlbumBloc(int albumId) {
     _fetchAlbumSongs(albumId);
-    _playSong.listen(_startPlaying);
+    _playController.stream.listen(_startPlaying);
+    _seekerController.stream.listen(_doSeek);
     playState.addListener(_pauseAndResume);
+    PlatformService.stopNotifier.addListener(_onStopped);
+    PlatformService.positionNotifier.addListener(_onPosition);
   }
 
   Future<void> _fetchAlbumSongs(int id) async {
-    _albumSongsList = await PlatformService.fetchSongsFromAlbum(id);
-    _albumSongsListSink.add(UnmodifiableListView<AudioMedia>(_albumSongsList));
-    songInfo.value = [
-      _albumSongsList[_songIndex].title,
-      _albumSongsList[_songIndex].artist
-    ];
-    _duration = _albumSongsList[_songIndex].duration;
-    _durationString = await compute(TimeUtil.convertTimeToString, _duration);
+    try {
+      _albumSongsList = await PlatformService.fetchSongsFromAlbum(id);
+    } catch (e) {
+      if (!_listController.isClosed) _listController.addError(e);
+      return;
+    }
+    if (_listController.isClosed) return;
+    _listController.add(UnmodifiableListView<AudioMedia>(_albumSongsList));
+    if (_albumSongsList.isEmpty) return;
+    final song = _albumSongsList[_songIndex];
+    songInfo.value = [song.title, song.artist];
+    _duration = song.duration;
+    _durationString = TimeUtil.convertTimeToString(_duration);
   }
 
-  Future<void> _startPlaying(data) async {
-    print('playback started');
-    _reset();
-    playState.value = "play";
-    _seek.listen(_doSeek);
-    PlatformService.stopNotifier.addListener(_stopAnim);
-    PlatformService.positionNotifier.addListener(_getPosition);
-    PlatformService.playSong(_albumSongsList[_songIndex].uri);
+  Future<void> _startPlaying(int _) async {
+    if (_albumSongsList.isEmpty) return;
+    PlatformService.reset();
+    playState.value = 'play';
+    await PlatformService.playSong(_albumSongsList[_songIndex].uri);
   }
 
-  void _getPosition() {
-    final List<String> list = [];
-    _position = PlatformService.positionNotifier.value;
-    list.add((_position / _duration).toString());
-    list.add(TimeUtil.convertTimeToString(_position));
-    list.add(_durationString);
-    _uiSink.add(list);
+  void _onPosition() {
+    if (_uiController.isClosed || _duration <= 0) return;
+    final position = PlatformService.positionNotifier.value;
+    _uiController.add([
+      (position / _duration).clamp(0.0, 1.0).toString(),
+      TimeUtil.convertTimeToString(position),
+      _durationString,
+    ]);
   }
 
-  void _stopAnim() {
-    if (PlatformService.stopNotifier.value == "complete")
-      playState.value = "stop";
+  void _onStopped() {
+    switch (PlatformService.stopNotifier.value) {
+      case 'complete':
+        playState.value = 'stop';
+      case 'error':
+        playState.value = 'error';
+    }
   }
 
   void _pauseAndResume() {
-    if (playState.value == "pause") {
+    if (playState.value == 'pause') {
       PlatformService.pauseSong();
-    } else if (playState.value == "resume") {
+    } else if (playState.value == 'resume') {
       PlatformService.resumeSong();
     }
   }
 
-  void _reset() {
-    playState.value = "";
-    songInfo.value = [];
-    PlatformService.reset();
-  }
-
-  void _doSeek(position) {
-    PlatformService.seekTo((position * _duration).floor());
+  void _doSeek(double position) {
+    if (_duration > 0) PlatformService.seekTo((position * _duration).floor());
   }
 
   @override
   void dispose() {
+    PlatformService.stopNotifier.removeListener(_onStopped);
+    PlatformService.positionNotifier.removeListener(_onPosition);
+    if (playState.value == 'play' || playState.value == 'resume') {
+      PlatformService.pauseSong();
+    }
     _listController.close();
     _playController.close();
     _uiController.close();

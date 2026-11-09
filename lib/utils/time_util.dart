@@ -1,14 +1,12 @@
 class TimeUtil {
-  /// Converts the duration in milliseconds to the format
-  /// HH:mm:ss if duration is more than hour else
-  /// use mm:ss
+  /// Converts a duration in milliseconds to `HH:mm:ss` when it is at least
+  /// an hour long, otherwise to `mm:ss`.
   static String convertTimeToString(int duration) {
-    int seconds = duration ~/ 1000;
-    String time = Duration(seconds: seconds).toString().split(".")[0];
-    if (seconds / 3600 >= 60) {
-      return time;
-    }
-    final list = time.split(":");
-    return "${list[1]}:${list[2]}";
+    final d = Duration(milliseconds: duration < 0 ? 0 : duration);
+    String two(int n) => n.toString().padLeft(2, '0');
+    final minutes = two(d.inMinutes.remainder(60));
+    final seconds = two(d.inSeconds.remainder(60));
+    if (d.inHours > 0) return '${two(d.inHours)}:$minutes:$seconds';
+    return '$minutes:$seconds';
   }
 }

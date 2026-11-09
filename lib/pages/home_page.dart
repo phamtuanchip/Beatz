@@ -9,31 +9,31 @@ import 'package:beatz/pages/songs_page.dart';
 import 'package:flutter/material.dart';
 
 class HomePage extends StatefulWidget {
-  HomePage({Key key, this.title}) : super(key: key);
+  const HomePage({super.key, required this.title});
   final String title;
 
   @override
-  _HomePageState createState() => _HomePageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
-  HomePageBloc _bloc;
-  AnimationController _controller;
-  Animation<double> _heightAnimation;
+  late HomePageBloc _bloc;
+  late final AnimationController _controller;
+  late final Animation<double> _heightAnimation;
 
   final _widgetOptions = [
     BlocProvider<AlbumsPageBloc>(
       bloc: AlbumsPageBloc(),
-      child: AlbumsPage(),
+      child: const AlbumsPage(),
     ),
     BlocProvider<SongsPageBloc>(
       bloc: SongsPageBloc(),
-      child: SongsPage(),
+      child: const SongsPage(),
     ),
     BlocProvider<PlaylistPageBloc>(
       bloc: PlaylistPageBloc(),
-      child: PlaylistPage(),
+      child: const PlaylistPage(),
     ),
   ];
 
@@ -41,7 +41,7 @@ class _HomePageState extends State<HomePage>
   void initState() {
     super.initState();
     _controller = AnimationController(
-        duration: Duration(milliseconds: 4000), vsync: this);
+        duration: const Duration(milliseconds: 4000), vsync: this);
     _heightAnimation =
         Tween<double>(begin: 0.0, end: 220.0).animate(CurvedAnimation(
       parent: _controller,
@@ -53,12 +53,13 @@ class _HomePageState extends State<HomePage>
   @override
   Widget build(BuildContext context) {
     _bloc = BlocProvider.of<HomePageBloc>(context);
-    return Column(
+    return Material(
+      child: Column(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
         AnimatedBuilder(
             animation: _controller,
-            builder: (_, __) {
+            builder: (_, _) {
               return Container(
                 height: _heightAnimation.value,
                 decoration: BoxDecoration(
@@ -90,21 +91,24 @@ class _HomePageState extends State<HomePage>
               stream: _bloc.pageIndexStream,
               builder: (context, snapshot) {
                 return Scaffold(
-                  body: _widgetOptions.elementAt(snapshot.data),
+                  body: IndexedStack(
+                    index: snapshot.data!,
+                    children: _widgetOptions,
+                  ),
                   bottomNavigationBar: BottomNavigationBar(
-                    currentIndex: snapshot.data,
+                    currentIndex: snapshot.data!,
                     items: [
                       BottomNavigationBarItem(
                         icon: Icon(Icons.album),
-                        title: Text("albums"),
+                        label: "albums",
                       ),
                       BottomNavigationBarItem(
                         icon: Icon(Icons.queue_music),
-                        title: Text("songs"),
+                        label: "songs",
                       ),
                       BottomNavigationBarItem(
                         icon: Icon(Icons.playlist_play),
-                        title: Text("playlist"),
+                        label: "playlist",
                       ),
                     ],
                     onTap: _onItemSelected,
@@ -113,6 +117,7 @@ class _HomePageState extends State<HomePage>
               }),
         ),
       ],
+      ),
     );
   }
 

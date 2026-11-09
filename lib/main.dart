@@ -3,25 +3,31 @@ import 'package:beatz/blocs/home_page_bloc.dart';
 import 'package:beatz/pages/home_page.dart';
 import 'package:flutter/material.dart';
 
-void main() => runApp(MyApp());
+void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
-  // This widget is the root of your application.
+  const MyApp({super.key, this.home});
+
+  /// Overrides the home screen (used by tests).
+  final Widget? home;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Beatz',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primaryColor: Colors.pinkAccent,
-        primaryColorDark: Colors.pink,
-        primaryColorLight: Colors.deepOrangeAccent,
-        accentColor: Colors.purpleAccent,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.pinkAccent,
+          primary: Colors.pinkAccent,
+          secondary: Colors.purpleAccent,
+        ),
       ),
-      home: BlocProvider<HomePageBloc>(
-        bloc: HomePageBloc(),
-        child: HomePage(title: 'Beatz'),
-      ),
+      home: home ??
+          BlocProvider<HomePageBloc>(
+            bloc: HomePageBloc(),
+            child: const HomePage(title: 'Beatz'),
+          ),
     );
   }
 }

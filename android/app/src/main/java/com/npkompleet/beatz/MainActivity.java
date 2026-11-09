@@ -1,40 +1,43 @@
 package com.npkompleet.beatz;
 
 import android.Manifest;
-import android.app.AlertDialog;
-import android.app.LoaderManager;
-import android.content.CursorLoader;
-import android.content.DialogInterface;
-import android.content.Loader;
+import android.content.ContentUris;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
-import android.media.AudioManager;
+import android.graphics.Bitmap;
+import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Build;
-import android.os.Bundle;
-import android.provider.MediaStore.Audio.Media;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore.Audio.Albums;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
+import android.provider.MediaStore.Audio.Media;
 import android.util.Log;
+import android.util.Size;
 
-import com.google.gson.Gson;
-import com.npkompleet.beatz.models.Album;
-import com.npkompleet.beatz.models.AudioMedia;
+import androidx.annotation.NonNull;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-import io.flutter.app.FlutterActivity;
+import io.flutter.embedding.android.FlutterActivity;
+import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.Result;
-import io.flutter.plugins.GeneratedPluginRegistrant;
 
-public class MainActivity extends FlutterActivity implements LoaderManager.LoaderCallbacks<Cursor>{
+public class MainActivity extends FlutterActivity {
+    private static final String TAG = "Beatz";
     private static final String CHANNEL_NAME = "com.npkompleet.beatz";
     private static final String FETCH_ALBUMS_METHOD = "fetchAlbums";
     private static final String FETCH_SONGS_FROM_ALBUM_METHOD = "fetchSongsFromAlbum";
@@ -44,246 +47,252 @@ public class MainActivity extends FlutterActivity implements LoaderManager.Loade
     private static final String PLAY_SONG_METHOD = "play";
     private static final String POSITION_METHOD = "position";
     private static final String SONG_COMPLETE_METHOD = "complete";
-    private static final int ALBUM_LIST_LOADER_ID = 100;
-    private static final int ALBUM_SONGS_LIST_LOADER_ID = 101;
-    private static final int REQUEST_EXTERNAL_STORAGE= 200;
-    Result channelResult;
-    Loader loader;
-    MediaPlayer mPlayer;
-    MethodChannel channel;
-    Timer timer;
+    private static final String ERROR_METHOD = "error";
+    private static final int REQUEST_AUDIO_PERMISSION = 200;
+    private static final long POSITION_INTERVAL_MS = 300L;
+
+    private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    /** Calls waiting for the audio permission dialog to be answered. */
+    private final List<Runnable> pendingPermissionCalls = new ArrayList<>();
+
+    private MethodChannel channel;
+    private MediaPlayer player;
+
+    private final Runnable positionTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (player != null && player.isPlaying()) {
+                channel.invokeMethod(POSITION_METHOD, player.getCurrentPosition());
+            }
+            mainHandler.postDelayed(this, POSITION_INTERVAL_MS);
+        }
+    };
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        GeneratedPluginRegistrant.registerWith(this);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-                    != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
-                        REQUEST_EXTERNAL_STORAGE);
-            }
-        }
-        setUpMethodChannel();
+    public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
+        super.configureFlutterEngine(flutterEngine);
+        channel = new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), CHANNEL_NAME);
+        channel.setMethodCallHandler(this::handleMethodCall);
     }
 
-    private void setUpMethodChannel(){
-        channel= new MethodChannel(getFlutterView(), CHANNEL_NAME);
-        // Method handler for calls to be executed
-        // on the Android side of the channel
-        channel.setMethodCallHandler(
-                new MethodChannel.MethodCallHandler() {
-                    @Override
-                    public void onMethodCall(MethodCall call, Result result) {
-                        channelResult = result;
-                        handleMethodCall(call, result);
-                    }
-                });
-    }
-
-    private void handleMethodCall(MethodCall call, Result result){
-        switch (call.method){
+    private void handleMethodCall(@NonNull MethodCall call, @NonNull Result result) {
+        switch (call.method) {
             case FETCH_ALBUMS_METHOD:
-                fetchAlbums();
+                withAudioPermission(() -> runQuery(result, this::queryAlbums), result);
                 break;
-            case FETCH_SONGS_FROM_ALBUM_METHOD:
-                HashMap<String, Integer> arguments= (HashMap<String, Integer>) call.arguments;
-                Bundle b= new Bundle();
-                b.putInt("albumId", arguments.get("albumId"));
-                Log.e("FLUTTER",arguments.get("albumId") + "ALBUMID" );
-                fetchSongsFromAlbum(b);
+            case FETCH_SONGS_FROM_ALBUM_METHOD: {
+                Number albumId = call.argument("albumId");
+                if (albumId == null) {
+                    result.error("bad_args", "albumId is required", null);
+                    return;
+                }
+                withAudioPermission(
+                        () -> runQuery(result, () -> querySongsFromAlbum(albumId.longValue())),
+                        result);
                 break;
+            }
             case PLAY_SONG_METHOD:
-                HashMap<String, String> songArg= (HashMap<String, String>) call.arguments;
-                playSong(songArg.get("songUrl"));
+                playSong(call.argument("songUrl"), result);
                 break;
-            case SEEK_METHOD:
-                HashMap<String, Integer> positionArg= (HashMap<String, Integer>) call.arguments;
-                seek(positionArg.get("position"));
+            case SEEK_METHOD: {
+                Number position = call.argument("position");
+                if (player != null && position != null) player.seekTo(position.intValue());
+                result.success(null);
                 break;
+            }
             case PAUSE_METHOD:
-                mPlayer.pause();
+                if (player != null && player.isPlaying()) player.pause();
+                result.success(null);
                 break;
             case RESUME_METHOD:
-                mPlayer.start();
+                if (player != null) player.start();
+                result.success(null);
                 break;
+            default:
+                result.notImplemented();
         }
     }
 
-    private void fetchAlbums(){
-        loader= null;
-        getLoaderManager().initLoader(ALBUM_LIST_LOADER_ID, null, this);
+    // ---------------------------------------------------------------- permissions
+
+    private String audioPermission() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? Manifest.permission.READ_MEDIA_AUDIO
+                : Manifest.permission.READ_EXTERNAL_STORAGE;
     }
 
-    private void fetchSongsFromAlbum(Bundle bundle){
-        getLoaderManager().restartLoader(ALBUM_SONGS_LIST_LOADER_ID, bundle, this);
+    private boolean hasAudioPermission() {
+        return checkSelfPermission(audioPermission()) == PackageManager.PERMISSION_GRANTED;
     }
 
-    @Override
-    public Loader<Cursor> onCreateLoader(int loaderId, Bundle bundle) {
-        Loader<Cursor> loader = null;
-        String[] projection;
-        String selection;
-        String[] selectionArgs;
-        switch (loaderId){
-            case ALBUM_LIST_LOADER_ID:
-                projection = new String[] {
-                        Albums._ID,
-                        Albums.ALBUM,
-                        Albums.ARTIST,
-                        Albums.ALBUM_ART,
-                        Albums.NUMBER_OF_SONGS };
-                String sortOrder = Media.ALBUM + " ASC";
-                loader = new CursorLoader(this, Albums.EXTERNAL_CONTENT_URI, projection,
-                        null, null, sortOrder);
-                break;
-
-            case ALBUM_SONGS_LIST_LOADER_ID:
-                projection = new String[] {
-                        Media._ID,
-                        Media.TITLE,
-                        Media.DISPLAY_NAME,
-                        Media.ARTIST,
-                        Media.DURATION,
-                        Media.TRACK,
-                        Media.DATA,
-                        Media.MIME_TYPE};
-                selection = Media.ALBUM_ID + "=?";
-                System.out.print(bundle.getInt("albumId") + "");
-                selectionArgs = new String[]{bundle.getInt("albumId") + ""};
-                Log.e("FLUTTER",bundle.getInt("albumId") + "" );
-                sortOrder = Media.TRACK + " ASC";
-                loader = new CursorLoader(this, Media.EXTERNAL_CONTENT_URI, projection,
-                        selection, selectionArgs, sortOrder);
-                break;
+    /** Runs {@code action} once the audio permission is granted, or fails {@code result}. */
+    private void withAudioPermission(Runnable action, Result result) {
+        if (hasAudioPermission()) {
+            action.run();
+            return;
         }
-        return loader;
-    }
-
-    @Override
-    public void onLoadFinished(Loader<Cursor> loader, Cursor cursor) {
-        Gson gson = new Gson();
-        switch(loader.getId()){
-            case ALBUM_LIST_LOADER_ID:
-                ArrayList<Album> albumList = new ArrayList<>();
-                if (cursor.moveToFirst()) {
-                    // Loop through the table and add album to list
-                    do {
-                        Album album = new Album();
-                        album.setId(cursor.getInt(0));
-                        album.setAlbum(cursor.getString(1));
-                        album.setArtist(cursor.getString(2));
-                        album.setAlbumArt(cursor.getString(3));
-                        album.setNumOfSongs(cursor.getInt(4));
-                        albumList.add(album);
-                    } while (cursor.moveToNext());
-                }
-                channelResult.success(gson.toJson(albumList));
-                break;
-
-            case ALBUM_SONGS_LIST_LOADER_ID:
-                ArrayList<AudioMedia> albumSongsList = new ArrayList<>();
-                if (cursor.moveToFirst()) {
-                    // Loop through the table and add media to list
-                    do {
-                        AudioMedia media = new AudioMedia();
-                        media.setId(cursor.getInt(0));
-                        media.setTitle(cursor.getString(1));
-                        media.setDisplayName(cursor.getString(2));
-                        media.setArtist(cursor.getString(3));
-                        media.setDuration(cursor.getLong(4));
-                        media.setTrack(cursor.getInt(5));
-                        media.setUri(cursor.getString(6));
-                        media.setType(cursor.getString(7));
-                        albumSongsList.add(media);
-                    } while (cursor.moveToNext());
-                }
-                channelResult.success(gson.toJson(albumSongsList));
-                break;
-
-        }
-
-    }
-
-    @Override
-    public void onLoaderReset(Loader<Cursor> loader) {
-    }
-
-    private void playSong(String uri){
-        if(mPlayer != null) mPlayer.release();
-        timer = new Timer();
-        mPlayer = new MediaPlayer();
-        mPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        try {
-            mPlayer.setDataSource(uri);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        mPlayer.prepareAsync();
-
-
-        mPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-            @Override
-            public void onPrepared(MediaPlayer mediaPlayer) {
-                TimerTask task = new TimerTask() {
-                    @Override
-                    public void run() {
-                        getPlaybackPosition();
-                    }
-                };
-                mediaPlayer.start();
-                timer.scheduleAtFixedRate(task, 0L, 300L);
-                channelResult.success("success");
+        pendingPermissionCalls.add(() -> {
+            if (hasAudioPermission()) {
+                action.run();
+            } else {
+                result.error("permission_denied", "Audio library permission was denied", null);
             }
         });
-
-        mPlayer.setOnCompletionListener(
-                new MediaPlayer.OnCompletionListener() {
-                    @Override
-                    public void onCompletion(MediaPlayer mediaPlayer) {
-                        timer.cancel();
-                        channel.invokeMethod(SONG_COMPLETE_METHOD, null);
-                    }
-                }
-        );
-    }
-
-    private void getPlaybackPosition(){
-        if(mPlayer.isPlaying()) {
-            channel.invokeMethod(POSITION_METHOD, mPlayer.getCurrentPosition());
+        if (pendingPermissionCalls.size() == 1) {
+            requestPermissions(new String[]{audioPermission()}, REQUEST_AUDIO_PERMISSION);
         }
     }
 
-    private void seek(int position){
-        mPlayer.seekTo(position);
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_AUDIO_PERMISSION) return;
+        List<Runnable> calls = new ArrayList<>(pendingPermissionCalls);
+        pendingPermissionCalls.clear();
+        for (Runnable call : calls) call.run();
     }
 
+    // ---------------------------------------------------------------- media queries
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        if (requestCode == REQUEST_EXTERNAL_STORAGE) {
-            if (grantResults[0] != PackageManager.PERMISSION_GRANTED) {
-                if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.READ_EXTERNAL_STORAGE)) {
-                    //Show an explanation to the user
-                    AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                    builder.setMessage("This permission is important to reread audio files from external storage.")
-                            .setTitle("Important permission required");
+    private interface Query {
+        String run() throws JSONException;
+    }
 
-                    builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-                        public void onClick(DialogInterface dialog, int id) {
-                            ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, REQUEST_EXTERNAL_STORAGE);
-                        }
-                    });
-                    ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, REQUEST_EXTERNAL_STORAGE);
-                }
+    /** Runs a MediaStore query off the main thread and replies on the main thread. */
+    private void runQuery(Result result, Query query) {
+        ioExecutor.execute(() -> {
+            try {
+                String json = query.run();
+                mainHandler.post(() -> result.success(json));
+            } catch (Exception e) {
+                Log.e(TAG, "Media query failed", e);
+                mainHandler.post(() -> result.error("query_failed", e.getMessage(), null));
+            }
+        });
+    }
+
+    private String queryAlbums() throws JSONException {
+        String[] projection = {
+                Albums._ID, Albums.ALBUM, Albums.ARTIST, Albums.ALBUM_ART, Albums.NUMBER_OF_SONGS};
+        JSONArray albums = new JSONArray();
+        try (Cursor cursor = getContentResolver().query(
+                Albums.EXTERNAL_CONTENT_URI, projection, null, null, Albums.ALBUM + " ASC")) {
+            if (cursor == null) return albums.toString();
+            while (cursor.moveToNext()) {
+                long id = cursor.getLong(0);
+                JSONObject album = new JSONObject();
+                album.put("id", id);
+                album.put("album", cursor.getString(1));
+                album.put("artist", cursor.getString(2));
+                album.put("albumArt", albumArtPath(id, cursor.getString(3)));
+                album.put("numOfSongs", cursor.getInt(4));
+                albums.put(album);
             }
         }
+        return albums.toString();
+    }
+
+    /**
+     * Returns a file path to the album cover. Since Android 10 ALBUM_ART is no longer
+     * populated, so the thumbnail is rendered once into the app cache.
+     */
+    private Object albumArtPath(long albumId, String legacyPath) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return legacyPath == null ? JSONObject.NULL : legacyPath;
+        }
+        File dir = new File(getCacheDir(), "album_art");
+        File file = new File(dir, albumId + ".jpg");
+        if (file.exists()) return file.getAbsolutePath();
+        Uri albumUri = ContentUris.withAppendedId(Albums.EXTERNAL_CONTENT_URI, albumId);
+        try {
+            Bitmap bitmap = getContentResolver().loadThumbnail(albumUri, new Size(512, 512), null);
+            if (!dir.exists() && !dir.mkdirs()) return JSONObject.NULL;
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out);
+            }
+            return file.getAbsolutePath();
+        } catch (IOException e) {
+            return JSONObject.NULL; // Album has no cover art.
+        }
+    }
+
+    private String querySongsFromAlbum(long albumId) throws JSONException {
+        String[] projection = {
+                Media._ID, Media.TITLE, Media.DISPLAY_NAME, Media.ARTIST,
+                Media.DURATION, Media.TRACK, Media.MIME_TYPE};
+        JSONArray songs = new JSONArray();
+        try (Cursor cursor = getContentResolver().query(Media.EXTERNAL_CONTENT_URI, projection,
+                Media.ALBUM_ID + "=?", new String[]{String.valueOf(albumId)}, Media.TRACK + " ASC")) {
+            if (cursor == null) return songs.toString();
+            while (cursor.moveToNext()) {
+                long id = cursor.getLong(0);
+                JSONObject song = new JSONObject();
+                song.put("id", id);
+                song.put("title", cursor.getString(1));
+                song.put("displayName", cursor.getString(2));
+                song.put("artist", cursor.getString(3));
+                song.put("duration", cursor.getLong(4));
+                song.put("track", cursor.getInt(5));
+                song.put("uri", ContentUris.withAppendedId(Media.EXTERNAL_CONTENT_URI, id).toString());
+                song.put("type", cursor.getString(6));
+                songs.put(song);
+            }
+        }
+        return songs.toString();
+    }
+
+    // ---------------------------------------------------------------- playback
+
+    private void playSong(String uri, Result result) {
+        if (uri == null) {
+            result.error("bad_args", "songUrl is required", null);
+            return;
+        }
+        releasePlayer();
+        MediaPlayer mp = new MediaPlayer();
+        player = mp;
+        mp.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build());
+        mp.setOnPreparedListener(prepared -> {
+            prepared.start();
+            mainHandler.post(positionTicker);
+            result.success("success");
+        });
+        mp.setOnCompletionListener(done -> {
+            mainHandler.removeCallbacks(positionTicker);
+            channel.invokeMethod(SONG_COMPLETE_METHOD, null);
+        });
+        mp.setOnErrorListener((failed, what, extra) -> {
+            Log.e(TAG, "MediaPlayer error what=" + what + " extra=" + extra);
+            mainHandler.removeCallbacks(positionTicker);
+            channel.invokeMethod(ERROR_METHOD, null);
+            return true;
+        });
+        try {
+            mp.setDataSource(this, Uri.parse(uri));
+            mp.prepareAsync();
+        } catch (IOException | IllegalArgumentException e) {
+            releasePlayer();
+            result.error("play_failed", e.getMessage(), null);
+        }
+    }
+
+    private void releasePlayer() {
+        mainHandler.removeCallbacks(positionTicker);
+        if (player != null) {
+            player.release();
+            player = null;
+        }
     }
 
     @Override
-    protected void onStop() {
-        // Release resources when done using app
-        if (mPlayer != null) mPlayer.release();
-        super.onStop();
+    protected void onDestroy() {
+        releasePlayer();
+        ioExecutor.shutdown();
+        super.onDestroy();
     }
 }
